@@ -32,7 +32,7 @@
 
 use crate::oracle_adapter::{dispatch_price, PRICE_SCALE};
 use crate::queries::get_subscription;
-use crate::safe_math::{safe_add, safe_sub, safe_sub_balance};
+use crate::safe_math::{safe_add, safe_mul, safe_sub, safe_sub_balance};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::subscription::{next_charge_time, write_subscription};
@@ -1361,10 +1361,8 @@ pub fn charge_usage_one(
             let treasury_opt = crate::admin::get_treasury(env);
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
-                    // Minimum-fee floor: see charge_one for rationale.
-                    let fee = (usage_amount * fee_bps as i128 / 10_000i128).max(1);
-                    let net = safe_sub(usage_amount, fee)?;
-                    (net, fee)
+                    let fee = safe_mul(usage_amount, fee_bps as i128)? / 10_000i128;
+                    (usage_amount - fee, fee)
                 } else {
                     (usage_amount, 0i128)
                 }
