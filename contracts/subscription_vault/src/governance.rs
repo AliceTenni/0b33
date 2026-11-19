@@ -60,6 +60,9 @@ fn ensure_proposal_not_invalidated(env: &Env, proposal_id: u64) -> Result<(), Er
     Ok(())
 }
 
+/// Minimum proposal execution quorum in basis points.
+const MIN_QUORUM_BPS: u32 = 6_700;
+
 /// Add or update a guardian's voting weight.
 ///
 /// # Errors
@@ -367,6 +370,7 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
     let total_weight = calculate_total_weight(env);
     let effective_quorum_bps = proposal.quorum_bps.max(MIN_QUORUM_BPS);
 
+    let effective_quorum_bps = proposal.quorum_bps.max(MIN_QUORUM_BPS);
     let required_votes = (total_weight as u128)
         .checked_mul(effective_quorum_bps as u128)
         .and_then(|v| v.checked_div(10_000))
