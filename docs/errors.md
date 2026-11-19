@@ -166,7 +166,6 @@ Column definitions:
 | 4011 | `TimelockNotElapsed` | State Transition | `admin.rs`, `test.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
 | 4013 | `NotInGracePeriod` | State Transition | `subscription.rs`, `test_grace_buyout.rs` | Refresh state; a grace-period buyout is only legal when status == GracePeriod. | — |
 | 4014 | `VacationActive` | State Transition | `charge_core.rs`, `merchant.rs`, `subscription.rs`, `test_merchant_vacation.rs`, `types.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
-| 4015 | `PlanDeprecated` | State Transition | `charge_core.rs`, `test.rs` | Migrate the subscription to a non-deprecated plan before charging again. | ChargeFailureEvent |
 | 5001 | `InsufficientBalance` | Accounting | `admin.rs`, `dispute.rs`, `lib.rs`, `merchant.rs`, `subscription.rs`, `test.rs`, `test_dispute_matrix.rs`, `test_grace_buyout.rs`, `test_merchant_full_drain.rs`, `test_merchant_sub_accounts.rs`, `test_recovery.rs`, `test_reentrancy_invariants.rs` | Retry only after subscriber deposits funds via deposit_funds. | FundsDepositedEvent |
 | 5002 | `InsufficientPrepaidBalance` | Accounting | `charge_core.rs`, `subscription.rs`, `test.rs` | Top up subscription via deposit_funds, then retry. | FundsDepositedEvent |
 | 5003 | `BelowMinimumTopup` | Accounting | `subscription.rs`, `test.rs`, `test_delegated_payer.rs` | Increase deposit amount above get_min_topup() threshold and retry. | — |
@@ -199,7 +198,7 @@ Column definitions:
 | 7005 | `UnknownMerchantTag` | Merchant Config | `merchant.rs`, `test_merchant_tags.rs` | Fix input; call get_tag_allowlist and use only listed tags. | — |
 | 7006 | `DuplicateMerchantTag` | Merchant Config | `merchant.rs`, `test_merchant_tags.rs` | Remove the repeated tag from the request and retry. | — |
 | 8001 | `InvalidTokenDecimals` | Token | `admin.rs`, `test_decimal_normalization.rs` | Fix token_decimals; must be in [1, 19]. | — |
-| 8002 | `InvalidToken` | Token | `admin.rs`, `test_decimal_normalization.rs` | Provide an accepted token address from list_accepted_tokens. | — |
+| 8002 | `InvalidToken` | Token | `accounting.rs`, `admin.rs`, `lib.rs`, `queries.rs`, `test_decimal_normalization.rs`, `test_recovery.rs` | Provide an accepted token address from list_accepted_tokens. | — |
 | 9001 | `CannotChangeUsageMode` | Subscription Update | `subscription.rs` | Cannot toggle usage_enabled on an existing subscription; create a new one. | — |
 | 9101 | `SchemaMigrationDowngrade` | Schema Migration | `admin.rs`, `test_config_migration.rs` | Downgrade rejected; deploy the correct binary version. | SchemaMigratedEvent |
 | 9102 | `SchemaVersionMismatch` | Schema Migration | `admin.rs`, `test.rs`, `test_config_migration.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |

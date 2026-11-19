@@ -784,13 +784,18 @@ pub const MAX_TOKEN_SUMMARIES_PER_PAGE: u32 = 50;
 /// # Returns
 ///
 /// A [`TokenLiabilities`] struct containing all computed values and a balance check.
+/// Returns [`Error::InvalidToken`] if `token` is not accepted by the contract.
 ///
 /// # Complexity
 ///
 /// This function scans all subscriptions and all merchants, which can be expensive
 /// for large contracts. For bounded compute, use [`query_prepaid_balances_paginated`]
 /// and aggregate off-chain.
-pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
+pub fn get_token_reconciliation(env: &Env, token: Address) -> Result<TokenLiabilities, Error> {
+    if !crate::admin::is_token_accepted(env, &token) {
+        return Err(Error::InvalidToken);
+    }
+
     let token_client = soroban_sdk::token::Client::new(env, &token);
     let contract_balance = token_client.balance(&env.current_contract_address());
 
@@ -798,7 +803,8 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
     let total_prepaid = compute_total_prepaid(env, &token);
 
     // Compute total merchant liabilities using precomputed total_prepaid
-    let total_merchant_liabilities = compute_total_merchant_liabilities(env, &token, total_prepaid);
+    let total_merchant_liabilities =
+        compute_total_merchant_liabilities(env, &token, total_prepaid)?;
 
     // Recoverable is the difference between contract balance and accounted funds
     let accounted = total_prepaid
@@ -821,7 +827,7 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
     let normalized_computed_total =
         crate::types::normalize_amount(env, &token, computed_total).unwrap_or(0);
 
-    TokenLiabilities {
+    Ok(TokenLiabilities {
         token,
         total_prepaid,
         total_merchant_liabilities,
@@ -834,7 +840,7 @@ pub fn get_token_reconciliation(env: &Env, token: Address) -> TokenLiabilities {
         normalized_recoverable,
         normalized_contract_balance,
         normalized_computed_total,
-    }
+    })
 }
 
 /// Returns paginated reconciliation summaries for all accepted tokens.
@@ -851,7 +857,7 @@ pub fn get_contract_reconciliation_summary(
     env: &Env,
     start_token_index: u32,
     limit: u32,
-) -> ReconciliationSummaryPage {
+) -> Result<ReconciliationSummaryPage, Error> {
     let limit = limit.min(MAX_TOKEN_SUMMARIES_PER_PAGE);
 
     // Get all accepted tokens
@@ -864,10 +870,10 @@ pub fn get_contract_reconciliation_summary(
     let total_tokens = accepted_tokens.len();
 
     if start_token_index >= total_tokens {
-        return ReconciliationSummaryPage {
+        return Ok(ReconciliationSummaryPage {
             token_summaries: Vec::new(env),
             next_token_index: None,
-        };
+        });
     }
 
     let end_index = (start_token_index + limit).min(total_tokens);
@@ -878,7 +884,7 @@ pub fn get_contract_reconciliation_summary(
         .skip(start_token_index as usize)
         .take((end_index - start_token_index) as usize)
     {
-        let summary = get_token_reconciliation(env, token);
+        let summary = get_token_reconciliation(env, token)?;
         token_summaries.push_back(summary);
     }
 
@@ -888,10 +894,10 @@ pub fn get_contract_reconciliation_summary(
         None
     };
 
-    ReconciliationSummaryPage {
+    Ok(ReconciliationSummaryPage {
         token_summaries,
         next_token_index,
-    }
+    })
 }
 
 /// Generates an auditable proof for off-chain reconciliation verification.
@@ -907,13 +913,21 @@ pub fn get_contract_reconciliation_summary(
 /// # Returns
 ///
 /// A [`ReconciliationProof`] containing all validation data.
+/// Returns [`Error::InvalidToken`] if `token` is not accepted by the contract.
 ///
 /// # Security
 ///
 /// This is a read-only function that cannot modify state. The proof is generated
 /// at the current ledger state and includes the ledger sequence for temporal
 /// anchoring.
-pub fn generate_reconciliation_proof(env: &Env, token: Address) -> ReconciliationProof {
+pub fn generate_reconciliation_proof(
+    env: &Env,
+    token: Address,
+) -> Result<ReconciliationProof, Error> {
+    if !crate::admin::is_token_accepted(env, &token) {
+        return Err(Error::InvalidToken);
+    }
+
     let token_client = soroban_sdk::token::Client::new(env, &token);
     let contract_balance = token_client.balance(&env.current_contract_address());
 
@@ -922,7 +936,7 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
 
     // Get merchant liabilities with count
     let (total_merchant_liabilities, merchant_count) =
-        compute_total_merchant_liabilities_with_count(env, &token, total_prepaid);
+        compute_total_merchant_liabilities_with_count(env, &token, total_prepaid)?;
 
     // Compute recoverable
     let accounted = total_prepaid
@@ -934,7 +948,7 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
     let computed_total = accounted.checked_add(computed_recoverable).unwrap_or(0i128);
     let is_valid = contract_balance == computed_total;
 
-    ReconciliationProof {
+    Ok(ReconciliationProof {
         timestamp: env.ledger().timestamp(),
         ledger_sequence: env.ledger().sequence(),
         token,
@@ -945,7 +959,7 @@ pub fn generate_reconciliation_proof(env: &Env, token: Address) -> Reconciliatio
         subscription_count: sub_count,
         merchant_count,
         is_valid,
-    }
+    })
 }
 
 /// Returns paginated prepaid balance aggregation for a token.
@@ -1041,17 +1055,21 @@ fn compute_total_prepaid_with_count(env: &Env, token: &Address) -> (i128, u32) {
     (total, count)
 }
 
-fn compute_total_merchant_liabilities(env: &Env, token: &Address, total_prepaid: i128) -> i128 {
-    let total_accounted = crate::accounting::get_total_accounted(env, token);
-    total_accounted.saturating_sub(total_prepaid).max(0i128)
+fn compute_total_merchant_liabilities(
+    env: &Env,
+    token: &Address,
+    total_prepaid: i128,
+) -> Result<i128, Error> {
+    let total_accounted = crate::accounting::get_total_accounted(env, token)?;
+    Ok(total_accounted.saturating_sub(total_prepaid).max(0i128))
 }
 
 fn compute_total_merchant_liabilities_with_count(
     env: &Env,
     token: &Address,
     total_prepaid: i128,
-) -> (i128, u32) {
-    let total_accounted = crate::accounting::get_total_accounted(env, token);
+) -> Result<(i128, u32), Error> {
+    let total_accounted = crate::accounting::get_total_accounted(env, token)?;
     let total = total_accounted.saturating_sub(total_prepaid).max(0i128);
 
     let mut merchant_count: u32 = 0;
@@ -1059,5 +1077,5 @@ fn compute_total_merchant_liabilities_with_count(
         merchant_count = 1;
     }
 
-    (total, merchant_count)
+    Ok((total, merchant_count))
 }
