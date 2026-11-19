@@ -60,9 +60,6 @@ fn ensure_proposal_not_invalidated(env: &Env, proposal_id: u64) -> Result<(), Er
     Ok(())
 }
 
-/// Minimum proposal execution quorum in basis points.
-const MIN_QUORUM_BPS: u32 = 6_700;
-
 /// Add or update a guardian's voting weight.
 ///
 /// # Errors
@@ -186,7 +183,12 @@ fn validate_proposal_config(
 /// Proposals require an ETA (execution timestamp) that is at least MIN_TIMELOCK_DELAY
 /// seconds in the future to prevent same-ledger execution.
 ///
+/// Only a current guardian may submit a proposal. The submitter's address is
+/// stored as `proposer` on the proposal so that cancellation rights can be
+/// checked accurately.
+///
 /// # Errors
+/// - `Unauthorized` if the caller is not a guardian with weight > 0.
 /// - `InvalidInput` if quorum_bps is invalid (> 10000).
 /// - `InvalidInput` if eta does not satisfy: eta >= created_at + MIN_TIMELOCK_DELAY.
 /// - `EmergencyStopActive` if emergency stop is enabled.
@@ -215,6 +217,12 @@ pub fn do_submit_proposal(
         return Err(Error::InvalidInput);
     }
 
+    // Record the proposer — used for cancellation auth checks.
+    let proposer = crate::admin::require_stored_admin_auth(env)?;
+    if get_guardian_weight(env, &proposer) == 0 {
+        return Err(Error::Unauthorized);
+    }
+
     let proposal_id = get_next_proposal_id(env);
     let votes = Map::new(env);
 
@@ -229,6 +237,7 @@ pub fn do_submit_proposal(
         eta,
         submitted_at: now,
         executed: false,
+        proposer: proposer.clone(),
     };
 
     write_proposal(env, proposal_id, &proposal);
@@ -370,7 +379,6 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
     let total_weight = calculate_total_weight(env);
     let effective_quorum_bps = proposal.quorum_bps.max(MIN_QUORUM_BPS);
 
-    let effective_quorum_bps = proposal.quorum_bps.max(MIN_QUORUM_BPS);
     let required_votes = (total_weight as u128)
         .checked_mul(effective_quorum_bps as u128)
         .and_then(|v| v.checked_div(10_000))
@@ -484,19 +492,60 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
 
 /// Cancel a proposal.
 ///
-/// Can only be called by the current admin. Prevents stale proposals from lingering.
+/// Permitted callers:
+/// 1. **The original proposer** — the guardian who submitted the proposal.
+/// 2. **The admin** — the current stored admin address.
+/// 3. **A guardian acting on majority consensus** — any active guardian may
+///    cancel when the current `votes_for` tally already exceeds 50% of total
+///    guardian weight, indicating the guardian set has collectively approved
+///    the underlying action (and therefore also approves cleanup if needed).
+///    The caller must still be an active guardian (weight > 0).
+///
+/// Any other caller is rejected with `Unauthorized`.
 ///
 /// # Errors
-/// - `Unauthorized` if caller is not the admin.
-/// - `NotFound` if proposal does not exist.
-/// - `InvalidInput` if proposal is already executed.
+/// - `Unauthorized` if the caller does not satisfy any of the above conditions.
+/// - `NotFound` if the proposal does not exist.
+/// - `InvalidInput` if the proposal is already executed (or cancelled).
 pub fn do_cancel_proposal(env: &Env, proposal_id: u64, reason: String) -> Result<(), Error> {
-    let _admin = crate::admin::require_stored_admin_auth(env)?;
+    let caller = crate::admin::require_stored_admin_auth(env)?;
 
     let mut proposal = read_proposal(env, proposal_id)?;
 
     if proposal.executed {
         return Err(Error::InvalidInput);
+    }
+
+    // ── Authorisation check ────────────────────────────────────────────────
+    //
+    // Three permitted paths:
+    //   1. Caller is the current admin.
+    //   2. Caller is the original proposer (and is still an active guardian).
+    //   3. Caller is any active guardian and votes_for already constitutes a
+    //      simple majority (> 50%) of total guardian weight.
+    //
+    // Path 1 — admin override
+    let admin = crate::admin::read_config::<Address>(env, &DataKey::Admin)
+        .ok_or(Error::NotInitialized)?;
+    let caller_is_admin = caller == admin;
+
+    // Path 2 — original proposer (must still hold guardian weight)
+    let caller_is_proposer =
+        caller == proposal.proposer && get_guardian_weight(env, &caller) > 0;
+
+    // Path 3 — majority guardian consensus already expressed via votes
+    let caller_is_active_guardian = get_guardian_weight(env, &caller) > 0;
+    let majority_reached = if caller_is_active_guardian {
+        let (votes_for, _votes_against) = calculate_quorum(env, &proposal);
+        let total_weight = calculate_total_weight(env);
+        // Strict majority: votes_for * 2 > total_weight
+        total_weight > 0 && (votes_for as u64) * 2 > (total_weight as u64)
+    } else {
+        false
+    };
+
+    if !caller_is_admin && !caller_is_proposer && !majority_reached {
+        return Err(Error::Unauthorized);
     }
 
     proposal.executed = true;

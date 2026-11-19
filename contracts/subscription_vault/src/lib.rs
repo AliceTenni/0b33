@@ -3401,6 +3401,33 @@ impl SubscriptionVault {
         admin::remove_accepted_token(&env, admin, token)
     }
 
+    /// Bulk-cancel all subscriptions denominated in `token`, paginated.
+    ///
+    /// Admin migration path for token removal (#583). After — or before —
+    /// removing a token from the registry, the admin calls this in pages to
+    /// cancel every subscription that settled in that token and return each
+    /// subscriber's prepaid balance immediately. Subscribers may also
+    /// self-service cancel at any time via `cancel_subscription`.
+    ///
+    /// # Arguments
+    /// - `admin` — current admin or operator address.
+    /// - `token` — settlement token whose subscriptions to cancel.
+    /// - `start` — 0-based page offset into the token subscription index.
+    /// - `limit` — page size; must be in `1..=BATCH_MAX_SIZE`.
+    /// - `nonce` — per-caller monotonic nonce (same domain as `bulk_cancel_subscriptions`).
+    pub fn cancel_subscriptions_for_token(
+        env: Env,
+        admin: Address,
+        token: Address,
+        start: u32,
+        limit: u32,
+        nonce: u64,
+    ) -> Result<Vec<BulkSubscriptionResult>, Error> {
+        let _guard =
+            crate::reentrancy::ReentrancyGuard::lock(&env, "cancel_subscriptions_for_token")?;
+        admin::cancel_subscriptions_for_token(&env, admin, token, start, limit, nonce)
+    }
+
     /// List accepted tokens.
     pub fn list_accepted_tokens(env: Env) -> Vec<AcceptedToken> {
         admin::list_accepted_tokens(&env)
