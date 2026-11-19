@@ -636,9 +636,10 @@ pub struct Subscription {
     pub auto_renew: bool,
     /// Timestamp when auto-renewal was last disabled. `None` means enabled.
     pub auto_renew_disabled_at: Option<u64>,
-    /// Optional ledger-sequence bound for expiration. When set, the subscription
-    /// also expires as soon as the ledger sequence reaches this value,
-    /// independently of the wall-clock `expires_at`. `None` disables the bound.
+    /// Optional ledger-sequence bound for expiration. When set to a nonzero value,
+    /// the subscription also expires as soon as the ledger sequence reaches this
+    /// value, independently of the wall-clock `expires_at`. `None` or `Some(0)`
+    /// disables the bound.
     ///
     /// Either bound being met is sufficient to consider the subscription
     /// expired for charge / deposit / state-transition purposes.
@@ -668,7 +669,7 @@ impl Subscription {
             }
         }
         if let Some(exp_ledger) = self.expires_at_ledger {
-            if current_ledger >= exp_ledger {
+            if exp_ledger != 0 && current_ledger >= exp_ledger {
                 return true;
             }
         }
