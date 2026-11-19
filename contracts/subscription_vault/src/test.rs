@@ -3516,6 +3516,35 @@ fn test_charge_usage_basic() {
 }
 
 #[test]
+fn test_charge_usage_fee_overflow_returns_error() {
+    let test_env = TestEnv::default();
+    let treasury = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_protocol_fee(&test_env.admin, &treasury, &10_000);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &true,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    let usage_amount = i128::MAX / 2;
+    fixtures::seed_balance(&test_env.env, &test_env.client, id, usage_amount);
+
+    assert_eq!(
+        test_env.client.try_charge_usage(&id, &usage_amount),
+        Err(Ok(Error::Overflow))
+    );
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #6003)")]
 fn test_charge_usage_not_enabled() {
     let test_env = TestEnv::default();
