@@ -47,6 +47,7 @@
 | 4008 | `AlreadyInitialized` | State transition | Contract init was called more than once. | Do not retry. |
 | 4009 | `MerchantPaused` | State transition | Merchant-wide pause blocks this action. | Retry only after merchant pause is removed. |
 | 4010 | `Reentrancy` | State transition | Reentrancy guard detected a nested call. | Treat as security failure and investigate immediately. |
+| 4015 | `PlanDeprecated` | State transition | Subscription's plan has been deprecated. | Migrate the subscription to a non-deprecated plan before charging again. |
 | 5001 | `InsufficientBalance` | Accounting | Vault, merchant, or refundable balance is insufficient. | Safe to retry only after balances change. |
 | 5002 | `InsufficientPrepaidBalance` | Accounting | Usage charge exceeds prepaid balance. | Top up first, then retry. |
 | 5003 | `BelowMinimumTopup` | Accounting | Deposit/top-up is below configured threshold. | Increase amount and retry. |
