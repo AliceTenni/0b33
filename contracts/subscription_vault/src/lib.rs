@@ -119,10 +119,11 @@ pub mod admin_api;
 pub mod statements {
     #![allow(dead_code)]
     use crate::types::{
-        AccruedTotals, BillingChargeKind, BillingCompactionSummary, BillingRetentionConfig,
-        BillingStatement, BillingStatementAggregate, BillingStatementsPage, DataKey, Error,
+        AccruedTotals, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
+        BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
+        BillingStatementsPage, DataKey, Error,
     };
-    use soroban_sdk::{Address, Env, Vec};
+    use soroban_sdk::{Address, Env, Symbol, Vec};
 
     /// Appends a new, immutable statement to the subscription's ledger under a
     /// fresh, monotonically-increasing sequence number.
@@ -176,11 +177,34 @@ pub mod statements {
         Ok(())
     }
 
-    pub fn set_retention_config(env: &Env, keep_recent: u32) {
+    pub fn set_retention_config(
+        env: &Env,
+        admin: &Address,
+        keep_recent: u32,
+    ) -> Result<(), Error> {
+        let config_key = DataKey::BillingRetentionConfig;
+        let previous = env
+            .storage()
+            .instance()
+            .get::<_, BillingRetentionConfig>(&config_key);
+
+        if previous.map_or(true, |config| keep_recent < config.keep_recent) {
+            let next_id: u32 =
+                crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
+            for subscription_id in 0..next_id {
+                let summary =
+                    compact_subscription_statements(env, subscription_id, Some(keep_recent))?;
+                if summary.pruned_count > 0 {
+                    publish_compaction_event(env, admin, summary);
+                }
+            }
+        }
+
         env.storage().instance().set(
-            &DataKey::BillingRetentionConfig,
+            &config_key,
             &BillingRetentionConfig { keep_recent },
         );
+        Ok(())
     }
 
     pub fn get_retention_config(env: &Env) -> BillingRetentionConfig {
@@ -335,6 +359,33 @@ pub mod statements {
             kept_count: kept_ids.len(),
             total_pruned_amount: pruned_amount_total,
         })
+    }
+
+    pub fn publish_compaction_event(
+        env: &Env,
+        admin: &Address,
+        summary: BillingCompactionSummary,
+    ) {
+        let aggregate = get_compacted_aggregate(env, summary.subscription_id);
+        env.events().publish(
+            (
+                Symbol::new(env, "billing_compacted"),
+                summary.subscription_id,
+            ),
+            BillingCompactedEvent {
+                admin: admin.clone(),
+                subscription_id: summary.subscription_id,
+                pruned_count: summary.pruned_count,
+                kept_count: summary.kept_count,
+                total_pruned_amount: summary.total_pruned_amount,
+                timestamp: env.ledger().timestamp(),
+                aggregate_pruned_count: aggregate.pruned_count,
+                aggregate_total_amount: aggregate.total_amount,
+                aggregate_oldest_period_start: aggregate.oldest_period_start,
+                aggregate_newest_period_end: aggregate.newest_period_end,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
     }
 
     /// Returns up to `limit` statements starting at `offset` into the
@@ -3462,8 +3513,7 @@ impl SubscriptionVault {
     pub fn set_billing_retention(env: Env, admin: Address, keep_recent: u32) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
         admin::enforce_config_cooldown(&env, "BillingRetention")?;
-        statements::set_retention_config(&env, keep_recent);
-        Ok(())
+        statements::set_retention_config(&env, &admin, keep_recent)
     }
 
     /// Get billing retention.
@@ -3492,24 +3542,7 @@ impl SubscriptionVault {
             subscription_id,
             keep_recent_override,
         )?;
-        let aggregate = statements::get_compacted_aggregate(&env, subscription_id);
-        env.events().publish(
-            (Symbol::new(&env, "billing_compacted"), subscription_id),
-            BillingCompactedEvent {
-                admin,
-                subscription_id,
-                pruned_count: summary.pruned_count,
-                kept_count: summary.kept_count,
-                total_pruned_amount: summary.total_pruned_amount,
-                timestamp: env.ledger().timestamp(),
-                aggregate_pruned_count: aggregate.pruned_count,
-                aggregate_total_amount: aggregate.total_amount,
-                aggregate_oldest_period_start: aggregate.oldest_period_start,
-                aggregate_newest_period_end: aggregate.newest_period_end,
-                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-                contract_id: env.current_contract_address(),
-            },
-        );
+        statements::publish_compaction_event(&env, &admin, summary.clone());
         Ok(summary)
     }
 
