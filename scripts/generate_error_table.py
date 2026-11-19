@@ -109,10 +109,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "MerchantPaused":                 ("Retry only after merchant pause is removed (unpause_merchant).", "MerchantUnpausedEvent", False),
     "Reentrancy":                     ("Treat as a security failure; investigate calling path immediately.", "—", False),
     "NotInGracePeriod":               ("Refresh state; a grace-period buyout is only legal when status == GracePeriod.", "—", False),
-    "TimelockNotElapsed":             ("Wait until the scheduled effective timestamp; this is a timelock, not an error condition.", "TreasuryChangeScheduledEvent", False),
-    "VacationActive":                 ("Retry after the merchant vacation window ends or the merchant calls unpause_merchant.", "MerchantUnpausedEvent", False),
-    "UsageLimitsRequired":            ("Call configure_usage_limits for this subscription before charging usage.", "UsageLimitsConfiguredEvent", False),
-    "EmergencyWithdrawInvalidState":  ("Refresh subscription state; emergency withdraw is only valid from the states the policy allows.", "—", False),
+    "PlanDeprecated":                 ("Migrate the subscription to a non-deprecated plan before charging again.", "ChargeFailureEvent", False),
     # Accounting
     "InsufficientBalance":            ("Retry only after subscriber deposits funds via deposit_funds.", "FundsDepositedEvent", False),
     "InsufficientPrepaidBalance":     ("Top up subscription via deposit_funds, then retry.", "FundsDepositedEvent", False),

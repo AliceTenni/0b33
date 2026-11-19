@@ -1895,8 +1895,8 @@ pub fn do_register_plan(
 /// referencing it.
 ///
 /// Deprecation is a one-way, idempotent operation: once deprecated a plan
-/// cannot be re-enabled. All existing subscriptions created from the plan
-/// continue to operate normally — only new subscription creation is blocked.
+/// cannot be re-enabled. Existing subscriptions created from the plan cannot
+/// be charged until migrated to a non-deprecated plan.
 ///
 /// # Arguments
 /// - `merchant`         — address that owns the plan; must authorise the call.
