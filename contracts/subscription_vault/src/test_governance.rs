@@ -835,6 +835,72 @@ mod vote_lock_during_timelock {
         assert!(result.is_ok(), "execution after timelock must still succeed");
     }
 
+    #[test]
+    fn execution_enforces_minimum_quorum_floor() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let other_guardian = Address::generate(&env);
+        let client = init_vault(&env, &admin);
+
+        client.add_guardian(&admin, &admin, &66);
+        client.add_guardian(&admin, &other_guardian, &34);
+
+        let eta = env.ledger().timestamp() + 3600;
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        // The admin is the voting identity for this API; 66% yes is below the floor.
+        client.vote_proposal(&proposal_id, &true);
+
+        env.ledger().set_timestamp(eta);
+        assert_eq!(
+            client.try_execute_proposal(&proposal_id),
+            Err(Ok(crate::types::Error::InvalidInput)),
+            "66% of guardian weight must not satisfy the 67% execution floor"
+        );
+    }
+
+    #[test]
+    fn execution_succeeds_at_minimum_quorum_floor() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let other_guardian = Address::generate(&env);
+        let client = init_vault(&env, &admin);
+
+        client.add_guardian(&admin, &admin, &67);
+        client.add_guardian(&admin, &other_guardian, &33);
+
+        let eta = env.ledger().timestamp() + 3600;
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &ProposalKind::RotateAdmin,
+            &target,
+            &None,
+            &0,
+            &5000,
+            &eta,
+        );
+
+        client.vote_proposal(&proposal_id, &true);
+        env.ledger().set_timestamp(eta);
+
+        assert!(
+            client.try_execute_proposal(&proposal_id).is_ok(),
+            "67% of guardian weight must satisfy the 67% execution floor"
+        );
+    }
+
     /// Test: cancel proposal still works even after timelock.
     #[test]
     fn cancel_proposal_after_timelock_succeeds() {

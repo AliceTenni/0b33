@@ -41,7 +41,8 @@ SUBMITTED → [VOTING PERIOD] → [ETA CHECK] → EXECUTED/CANCELLED
 3. **Execute** (`execute_proposal`):
    - Validates ETA has passed
    - Recalculates quorum considering current (not historical) guardian weights
-   - Requires vote percentage ≥ quorum_bps
+   - Enforces an execution floor of `MIN_QUORUM_BPS = 6700` (67%): the effective quorum is `max(quorum_bps, MIN_QUORUM_BPS)`. Proposals submitted with `quorum_bps < MIN_QUORUM_BPS` therefore use the 67% floor at execution.
+   - Requires yes votes to meet the effective quorum
    - Atomically applies the proposal action and marks as executed
    - Prevents re-execution via immutability flag
 
@@ -115,6 +116,7 @@ Execute a proposal if quorum is met and ETA passed.
 
 - **Arguments:**
   - `proposal_id`: ID of proposal to execute
+- **Quorum enforcement:** Execution uses `max(proposal.quorum_bps, MIN_QUORUM_BPS)`, where `MIN_QUORUM_BPS` is 6700 (67%). A proposal submitted with `quorum_bps < 6700` therefore uses the 6700-bps floor when calculating required yes votes from current total guardian weight.
 
 - **Errors:**
   - `NotFound` if proposal doesn't exist
