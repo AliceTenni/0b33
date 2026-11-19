@@ -156,6 +156,7 @@ flowchart LR
   Auth: admin.  
   Both delegate to `charge_one` in `contracts/subscription_vault/src/charge_core.rs`.
 - **Behavior:** Charges are attempted for **Active** and **GracePeriod** subscriptions. If `now < last_payment_timestamp + interval_seconds`, returns `Error::IntervalNotElapsed` (1001). On success, balance and `last_payment_timestamp` are updated and a charge statement is appended. On insufficient balance, no funds move and no statement is appended; instead status transitions to `GracePeriod` or `InsufficientBalance` and a charge-failed event is emitted.
+- **Deprecated plans:** A subscription linked to a deprecated plan cannot be charged (`Error::PlanDeprecated`, 4015). The subscriber must migrate it to a non-deprecated plan before charges can resume. Subscriptions not created from a plan template are unaffected.
 
 ### Pause / Resume / Cancel
 
@@ -203,6 +204,7 @@ From `contracts/subscription_vault/src/types.rs`. For the full canonical table w
 | 4002 | `NotActive` | Charge attempted on non-Active/non-GracePeriod subscription. |
 | 4003 | `SubscriptionExpired` | Charge attempted after the subscription's `expiration` timestamp. |
 | 4004 | `IntervalNotElapsed` | Charge attempted before interval elapsed. |
+| 4015 | `PlanDeprecated` | The subscription's linked plan is deprecated; migrate it before charging. |
 | 5001 | `InsufficientBalance` | Charge failed due to insufficient prepaid balance. |
 | 5003 | `BelowMinimumTopup` | Deposit is below the configured `min_topup` threshold. |
 

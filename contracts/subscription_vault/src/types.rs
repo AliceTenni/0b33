@@ -928,6 +928,8 @@ pub enum Error {
     CooldownActive = 4012,
     /// Merchant vacation mode is active — charges blocked during vacation window.
     VacationActive = 4014,
+    /// The subscription's plan has been deprecated and must be migrated before charging.
+    PlanDeprecated = 4015,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -2277,8 +2279,9 @@ pub struct PlanRegisteredEvent {
 
 /// Emitted when a merchant deprecates an existing plan template via `deprecate_plan`.
 ///
-/// Once deprecated the plan can no longer be used to create new subscriptions.
-/// Existing subscriptions created from the plan are unaffected.
+/// Once deprecated the plan can no longer be used to create new subscriptions,
+/// and existing subscriptions created from the plan cannot be charged until
+/// migrated to a non-deprecated plan.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PlanDeprecatedEvent {

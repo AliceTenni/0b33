@@ -249,6 +249,24 @@ pub fn charge_one(
         ));
     }
 
+    if let Some(plan_id) = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&DataKey::SubPlan(subscription_id))
+    {
+        let plan = crate::subscription::get_plan_template(env, plan_id)
+            .map_err(|e| charge_fail(env, subscription_id, e, sub.amount, now))?;
+        if plan.is_disabled {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::PlanDeprecated,
+                sub.amount,
+                now,
+            ));
+        }
+    }
+
     let charge_amount = crate::oracle::resolve_charge_amount(env, subscription_id, &sub)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
