@@ -9,8 +9,9 @@ use crate::types::{
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent,
     RecoveryInitiatorRole, RecoveryReason, SchemaMigrationSummary, Subscription, SubscriptionStatus,
-    TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, BATCH_MAX_SIZE, MAX_PROTOCOL_FEE_BIPS,
-    TOPIC_RECOVERY, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    TokenRemovedEvent, TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, BATCH_MAX_SIZE,
+    MAX_PROTOCOL_FEE_BIPS, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BASE_EVENT_SCHEMA_VERSION,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -479,7 +480,10 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
     }
 
     // A token cannot be removed while any live subscription still references
-    // it; otherwise existing subscriptions could become unchargeable.
+    // it; otherwise existing subscriptions could become unchargeable and their
+    // prepaid balances inaccessible. Callers must cancel or migrate all
+    // `Active` and `GracePeriod` subscriptions first (e.g. via
+    // `cancel_subscriptions_for_token`).
     let token_ids: Vec<u32> = env
         .storage()
         .instance()
@@ -492,6 +496,8 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
             }
         }
     }
+    // Snapshot count before mutation for the event payload.
+    let remaining_subscription_count = token_ids.len();
 
     // Require multi-sig approval for removing tokens
     let proposal_id = require_multisig_approval(
@@ -515,10 +521,22 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
         }
     }
     storage.set(&accepted_tokens_key(), &next);
-    
+
     // Mark the multi-sig proposal as consumed
     consume_multisig_proposal(env, proposal_id)?;
-    
+
+    env.events().publish(
+        (Symbol::new(env, "token_removed"),),
+        TokenRemovedEvent {
+            token: token.clone(),
+            remaining_subscription_count,
+            admin,
+            timestamp: env.ledger().timestamp(),
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
+        },
+    );
+
     Ok(())
 }
 
@@ -532,6 +550,58 @@ pub fn list_accepted_tokens(env: &Env) -> Vec<AcceptedToken> {
         }
     }
     out
+}
+
+/// Bulk-cancel all subscriptions denominated in `token`, paginated by `start`
+/// and `limit`.
+///
+/// This is the admin migration path for #583: after a token is removed from
+/// the registry (or before removal, to drain live subs), the admin can sweep
+/// all subscriptions that settled in `token` into `Cancelled` state, refunding
+/// each subscriber's prepaid balance immediately via the standard
+/// `apply_cancellation` path.
+///
+/// # Arguments
+/// - `admin` — the caller; must be the current admin or operator.
+/// - `token` — the settlement token whose subscriptions to cancel.
+/// - `start` — 0-based offset into the `TokenSubs` index (for pagination).
+/// - `limit` — number of IDs to process; capped at [`BATCH_MAX_SIZE`].
+/// - `nonce` — per-caller monotonic nonce for replay protection.
+///
+/// # Errors
+/// - `Unauthorized` / `Forbidden` if `admin` is not the current admin or operator.
+/// - `BatchTooLarge` if `limit` exceeds [`BATCH_MAX_SIZE`].
+/// - `InvalidInput` if `limit` is 0.
+pub fn cancel_subscriptions_for_token(
+    env: &Env,
+    admin: Address,
+    token: Address,
+    start: u32,
+    limit: u32,
+    nonce: u64,
+) -> Result<Vec<crate::types::BulkSubscriptionResult>, Error> {
+    if limit == 0 || limit > BATCH_MAX_SIZE {
+        return Err(Error::BatchTooLarge);
+    }
+
+    let all_ids: Vec<u32> = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenSubs(token))
+        .unwrap_or(Vec::new(env));
+
+    let total = all_ids.len();
+    let mut page = Vec::new(env);
+    if start < total {
+        let end = (start + limit).min(total);
+        for id in all_ids.iter().skip(start as usize).take((end - start) as usize) {
+            page.push_back(id);
+        }
+    }
+
+    // Delegate to the standard bulk-cancel path, which handles auth,
+    // per-subscription refunds, index cleanup, and event emission.
+    crate::subscription::do_bulk_cancel_subscriptions(env, admin, &page, nonce)
 }
 
 /// Cached admin configuration values to avoid repeated instance-storage

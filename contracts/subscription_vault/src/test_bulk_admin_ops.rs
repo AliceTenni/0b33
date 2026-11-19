@@ -806,3 +806,219 @@ fn bulk_operations_are_not_atomic_successful_changes_persist() {
     // all IDs exist before calling bulk operations, or implement their own
     // rollback logic by inspecting the returned results.
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Token-removal migration path — issue #583
+//
+// Tests the two acceptance criteria:
+//   AC1 — `remove_accepted_token` emits a `TokenRemovedEvent`.
+//   AC2 — `cancel_subscriptions_for_token` lets the admin drain subscriptions
+//          denominated in a removed token, refunding each subscriber's balance.
+// ══════════════════════════════════════════════════════════════════════════════
+
+mod token_removal_migration {
+    use crate::test_utils::setup::TestEnv;
+    use crate::types::{Error, SubscriptionStatus, TokenRemovedEvent, BASE_EVENT_SCHEMA_VERSION};
+    use soroban_sdk::{
+        testutils::{Address as _, Events as _},
+        token::StellarAssetClient as TokenAdminClient,
+        Address, Env, Symbol,
+    };
+
+    const AMOUNT: i128 = 1_000;
+    const INTERVAL: u64 = 24 * 60 * 60;
+    const DEPOSIT: i128 = 5_000_000;
+
+    /// Register a fresh Stellar asset contract as a second accepted token and
+    /// return its address.
+    fn register_second_token(te: &TestEnv) -> Address {
+        let token2 = te
+            .env
+            .register_stellar_asset_contract_v2(te.admin.clone())
+            .address();
+        te.client
+            .add_accepted_token(&te.admin, &token2, &6u32);
+        token2
+    }
+
+    /// Create a `Paused` subscription denominated in `token` with a prepaid
+    /// balance.  `Paused` is used because `remove_accepted_token` rejects
+    /// removal while any `Active`/`GracePeriod` subs reference the token.
+    fn paused_sub_for_token(te: &TestEnv, subscriber: &Address, token: &Address) -> u32 {
+        let merchant = Address::generate(&te.env);
+        let sub_id = te.client.create_subscription_with_token(
+            subscriber, &merchant, token, &AMOUNT, &INTERVAL, &false, &None,
+            &None, &None::<u32>, &None,
+        );
+        // Mint and deposit via the second token's admin client
+        TokenAdminClient::new(&te.env, token).mint(subscriber, &DEPOSIT);
+        te.client.deposit_funds(&sub_id, &DEPOSIT, &None);
+        // Pause so the token can be removed
+        te.client.pause_subscription(&sub_id, subscriber);
+        sub_id
+    }
+
+    fn token_balance(te: &TestEnv, token: &Address, who: &Address) -> i128 {
+        soroban_sdk::token::Client::new(&te.env, token)
+            .balance(who)
+    }
+
+    // ── AC1: TokenRemovedEvent is emitted ────────────────────────────────────
+
+    #[test]
+    fn remove_accepted_token_emits_token_removed_event() {
+        let te = TestEnv::default();
+        let token2 = register_second_token(&te);
+        let subscriber = Address::generate(&te.env);
+        let _sub_id = paused_sub_for_token(&te, &subscriber, &token2);
+
+        te.client.remove_accepted_token(&te.admin, &token2);
+
+        let events = te.env.events().all();
+        let topic = Symbol::new(&te.env, "token_removed");
+        let evt = events.iter().rev().find(|e| {
+            e.0.len() >= 1 && {
+                let sym: Symbol = soroban_sdk::FromVal::from_val(&te.env, &e.0.get(0).unwrap());
+                sym == topic
+            }
+        });
+        assert!(evt.is_some(), "token_removed event must be emitted");
+
+        let payload: TokenRemovedEvent =
+            soroban_sdk::FromVal::from_val(&te.env, &evt.unwrap().1);
+        assert_eq!(payload.token, token2);
+        assert_eq!(payload.remaining_subscription_count, 1);
+        assert_eq!(payload.admin, te.admin);
+        assert_eq!(payload.schema_version, BASE_EVENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn remove_accepted_token_with_no_subs_emits_zero_count() {
+        let te = TestEnv::default();
+        let token2 = register_second_token(&te);
+
+        te.client.remove_accepted_token(&te.admin, &token2);
+
+        let events = te.env.events().all();
+        let topic = Symbol::new(&te.env, "token_removed");
+        let evt = events.iter().rev().find(|e| {
+            e.0.len() >= 1 && {
+                let sym: Symbol = soroban_sdk::FromVal::from_val(&te.env, &e.0.get(0).unwrap());
+                sym == topic
+            }
+        });
+        let payload: TokenRemovedEvent =
+            soroban_sdk::FromVal::from_val(&te.env, &evt.unwrap().1);
+        assert_eq!(payload.remaining_subscription_count, 0);
+    }
+
+    // ── AC2: cancel_subscriptions_for_token migrates balances ────────────────
+
+    #[test]
+    fn cancel_subscriptions_for_token_refunds_prepaid_balances() {
+        let te = TestEnv::default();
+        let token2 = register_second_token(&te);
+        let subscriber = Address::generate(&te.env);
+        let sub_id = paused_sub_for_token(&te, &subscriber, &token2);
+
+        // Balance is locked inside the vault — subscriber holds nothing.
+        assert_eq!(token_balance(&te, &token2, &subscriber), 0);
+
+        let results =
+            te.client
+                .cancel_subscriptions_for_token(&te.admin, &token2, &0u32, &10u32, &0u64);
+
+        assert_eq!(results.len(), 1);
+        let r = results.get(0).unwrap();
+        assert!(r.success, "cancel must succeed");
+        assert!(r.changed, "subscription must have been changed");
+
+        assert_eq!(
+            te.client.get_subscription(&sub_id).status,
+            SubscriptionStatus::Cancelled
+        );
+        // Full prepaid balance returned to the subscriber.
+        assert_eq!(token_balance(&te, &token2, &subscriber), DEPOSIT);
+    }
+
+    #[test]
+    fn cancel_subscriptions_for_token_paginates_correctly() {
+        let te = TestEnv::default();
+        let token2 = register_second_token(&te);
+        let sub_a = paused_sub_for_token(&te, &Address::generate(&te.env), &token2);
+        let sub_b = paused_sub_for_token(&te, &Address::generate(&te.env), &token2);
+        let sub_c = paused_sub_for_token(&te, &Address::generate(&te.env), &token2);
+
+        // Page 1: cancel first two
+        let r1 = te.client
+            .cancel_subscriptions_for_token(&te.admin, &token2, &0u32, &2u32, &0u64);
+        assert_eq!(r1.len(), 2);
+
+        // Page 2: cancel the third (nonce=1 because page 1 consumed nonce=0)
+        let r2 = te.client
+            .cancel_subscriptions_for_token(&te.admin, &token2, &2u32, &2u32, &1u64);
+        assert_eq!(r2.len(), 1);
+        assert!(r2.get(0).unwrap().success);
+
+        assert_eq!(
+            te.client.get_subscription(&sub_a).status,
+            SubscriptionStatus::Cancelled
+        );
+        assert_eq!(
+            te.client.get_subscription(&sub_b).status,
+            SubscriptionStatus::Cancelled
+        );
+        assert_eq!(
+            te.client.get_subscription(&sub_c).status,
+            SubscriptionStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn cancel_subscriptions_for_token_zero_limit_rejected() {
+        let te = TestEnv::default();
+        let token2 = register_second_token(&te);
+        let result =
+            te.client
+                .try_cancel_subscriptions_for_token(&te.admin, &token2, &0u32, &0u32, &0u64);
+        assert_eq!(result, Err(Ok(Error::BatchTooLarge)));
+    }
+
+    #[test]
+    fn cancel_subscriptions_for_token_start_beyond_index_returns_empty() {
+        let te = TestEnv::default();
+        let token2 = register_second_token(&te);
+        // No subscriptions; start=0, limit=10 should return empty successfully.
+        let results =
+            te.client
+                .cancel_subscriptions_for_token(&te.admin, &token2, &0u32, &10u32, &0u64);
+        assert_eq!(results.len(), 0);
+    }
+
+    // ── Live-subscription guard still blocks removal ──────────────────────────
+
+    #[test]
+    fn remove_accepted_token_blocked_while_active_subscription_exists() {
+        let te = TestEnv::default();
+        let token2 = register_second_token(&te);
+        let subscriber = Address::generate(&te.env);
+        let merchant = Address::generate(&te.env);
+
+        // Create an Active subscription (not paused) for token2.
+        let sub_id = te.client.create_subscription_with_token(
+            &subscriber, &merchant, &token2, &AMOUNT, &INTERVAL, &false,
+            &None, &None, &None::<u32>, &None,
+        );
+        TokenAdminClient::new(&te.env, &token2).mint(&subscriber, &DEPOSIT);
+        te.client.deposit_funds(&sub_id, &DEPOSIT, &None);
+        // sub is now Active with funds.
+
+        let result = te.client.try_remove_accepted_token(&te.admin, &token2);
+        assert_eq!(
+            result,
+            Err(Ok(Error::InvalidStatusTransition)),
+            "must not remove token while Active subscription exists"
+        );
+    }
+}
+

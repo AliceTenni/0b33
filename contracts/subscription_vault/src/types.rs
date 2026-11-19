@@ -1317,6 +1317,8 @@ pub struct Proposal {
     pub eta: u64,
     pub submitted_at: u64,
     pub executed: bool,
+    /// The guardian address that submitted this proposal.
+    pub proposer: Address,
 }
 
 /// Event emitted when a new governance proposal is submitted.
@@ -3698,6 +3700,31 @@ pub struct PrepaidQueryResult {
     pub subscriptions_count: u32,
     pub next_start_id: Option<u32>,
     pub has_more: bool,
+}
+
+/// Event emitted when a token is removed from the accepted-token registry.
+///
+/// Emitted by `remove_accepted_token` after the registry is mutated.
+/// Indexers should use `remaining_subscription_count` to determine whether
+/// any subscriptions denominated in this token still exist. Because the
+/// existing live-subscription guard prevents removal while `Active` or
+/// `GracePeriod` subscriptions reference the token, all remaining
+/// subscriptions at removal time are in a terminal or quiescent state
+/// (`Cancelled`, `Paused`, `InsufficientBalance`, `Expired`, `Archived`).
+/// Subscribers may still self-service cancel via `cancel_subscription`, or
+/// the admin may use `cancel_subscriptions_for_token` to drain them in bulk.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TokenRemovedEvent {
+    pub token: Address,
+    /// Number of subscription IDs still indexed under this token at removal time.
+    /// These subscriptions are non-chargeable but their prepaid balances can still
+    /// be recovered via cancellation.
+    pub remaining_subscription_count: u32,
+    pub admin: Address,
+    pub timestamp: u64,
+    pub schema_version: u32,
+    pub contract_id: Address,
 }
 
 #[cfg(test)]
