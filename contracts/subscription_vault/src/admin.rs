@@ -553,7 +553,7 @@ pub fn do_recover_stranded_funds(
     // Validate available recoverable balance
     let token_client = token::Client::new(env, &token);
     let contract_balance = token_client.balance(&env.current_contract_address());
-    let accounted_balance = crate::accounting::get_total_accounted(env, &token);
+    let accounted_balance = crate::accounting::get_total_accounted(env, &token)?;
 
     let recoverable = contract_balance
         .checked_sub(accounted_balance)

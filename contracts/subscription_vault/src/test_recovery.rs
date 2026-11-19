@@ -31,6 +31,21 @@ fn setup_env() -> (Env, SubscriptionVaultClient<'static>, Address, Address) {
 }
 
 #[test]
+fn get_total_accounted_rejects_unregistered_token() {
+    let (env, _client, token_addr, _admin) = setup_env();
+    let unregistered_token = Address::generate(&env);
+
+    assert_eq!(
+        crate::accounting::get_total_accounted(&env, &token_addr),
+        Ok(0)
+    );
+    assert_eq!(
+        crate::accounting::get_total_accounted(&env, &unregistered_token),
+        Err(Error::InvalidToken)
+    );
+}
+
+#[test]
 fn test_recovery_success_all_reasons() {
     let (env, client, token_addr, admin) = setup_env();
     let recipient = Address::generate(&env);

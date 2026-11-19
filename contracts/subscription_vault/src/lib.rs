@@ -335,8 +335,11 @@ pub mod accounting {
     pub fn sub_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> {
         Ok(())
     }
-    pub fn get_total_accounted(_env: &Env, _token: &Address) -> i128 {
-        0
+    pub fn get_total_accounted(env: &Env, token: &Address) -> Result<i128, Error> {
+        if !crate::admin::is_token_accepted(env, token) {
+            return Err(Error::InvalidToken);
+        }
+        Ok(0)
     }
 }
 
@@ -2977,7 +2980,10 @@ impl SubscriptionVault {
     // ── Reconciliation Queries ─────────────────────────────────────────────────
 
     /// Token reconciliation summary.
-    pub fn get_token_reconciliation(env: Env, token: Address) -> TokenLiabilities {
+    pub fn get_token_reconciliation(
+        env: Env,
+        token: Address,
+    ) -> Result<TokenLiabilities, Error> {
         queries::get_token_reconciliation(&env, token)
     }
 
@@ -2986,12 +2992,15 @@ impl SubscriptionVault {
         env: Env,
         start_token_index: u32,
         limit: u32,
-    ) -> ReconciliationSummaryPage {
+    ) -> Result<ReconciliationSummaryPage, Error> {
         queries::get_contract_reconciliation_summary(&env, start_token_index, limit)
     }
 
     /// auditable reconciliation proof.
-    pub fn generate_reconciliation_proof(env: Env, token: Address) -> ReconciliationProof {
+    pub fn generate_reconciliation_proof(
+        env: Env,
+        token: Address,
+    ) -> Result<ReconciliationProof, Error> {
         queries::generate_reconciliation_proof(&env, token)
     }
 
