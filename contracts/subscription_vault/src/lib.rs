@@ -1859,7 +1859,7 @@ impl SubscriptionVault {
     ///
     /// Deprecation is idempotent: calling it on an already-deprecated plan is a
     /// no-op. Only the merchant who owns the plan may deprecate it. Existing
-    /// subscriptions created from the plan are unaffected.
+    /// subscriptions remain recorded, but future interval renewals are rejected.
     ///
     /// Requires merchant authorisation.
     pub fn deprecate_plan(
