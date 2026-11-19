@@ -563,6 +563,27 @@ pub fn charge_one(
         ));
     }
 
+    // A linked plan must still exist and be active before an interval renewal.
+    // Subscriptions created without a plan template have no SubPlan entry and
+    // continue to use their explicitly configured terms.
+    if let Some(plan_id) = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&DataKey::SubPlan(subscription_id))
+    {
+        let plan = crate::subscription::get_plan_template(env, plan_id)
+            .map_err(|e| charge_fail(env, subscription_id, e, charge_amount, now))?;
+        if plan.is_disabled {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::NotFound,
+                charge_amount,
+                now,
+            ));
+        }
+    }
+
     // -- Lifetime cap pre-check -----------------------------------------------
     if let Some(cap) = sub.lifetime_cap {
         let remaining = if crate::subscription::lifetime_cap_reached(cap, sub.lifetime_charged) {

@@ -119,6 +119,31 @@ mod test_auto_renew {
         (id, subscriber, merchant)
     }
 
+    fn create_funded_plan_subscription(
+        env: &Env,
+        client: &SubscriptionVaultClient,
+    ) -> (u32, Address, u32) {
+        let subscriber = Address::generate(env);
+        let merchant = Address::generate(env);
+        let plan_id = client.register_plan(
+            &merchant,
+            &AMOUNT,
+            &INTERVAL,
+            &0,
+            &false,
+            &None::<i128>,
+        );
+        let id = client.create_subscription_from_plan(&subscriber, &plan_id);
+
+        let mut sub = client.get_subscription(&id);
+        sub.prepaid_balance = PREPAID;
+        env.as_contract(&client.address, || {
+            env.storage().persistent().set(&DataKey::Sub(id), &sub);
+        });
+
+        (id, merchant, plan_id)
+    }
+
     /// Advance the ledger timestamp by `delta` seconds.
     fn advance(env: &Env, delta: u64) {
         env.ledger().with_mut(|l| {
@@ -255,6 +280,32 @@ mod test_auto_renew {
             sub.prepaid_balance < PREPAID,
             "balance must decrease after a successful charge"
         );
+    }
+
+    #[test]
+    fn test_deprecated_plan_blocks_auto_renewal() {
+        let (env, client, _token, _admin) = setup();
+        let (id, merchant, plan_id) = create_funded_plan_subscription(&env, &client);
+        client.deprecate_plan(&merchant, &plan_id);
+        advance(&env, INTERVAL + 1);
+
+        let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+        assert_eq!(result, Err(Ok(Error::NotFound)));
+        assert_eq!(client.get_subscription(&id).prepaid_balance, PREPAID);
+    }
+
+    #[test]
+    fn test_missing_plan_blocks_auto_renewal() {
+        let (env, client, _token, _admin) = setup();
+        let (id, _merchant, plan_id) = create_funded_plan_subscription(&env, &client);
+        env.as_contract(&client.address, || {
+            env.storage().instance().remove(&DataKey::Plan(plan_id));
+        });
+        advance(&env, INTERVAL + 1);
+
+        let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+        assert_eq!(result, Err(Ok(Error::NotFound)));
+        assert_eq!(client.get_subscription(&id).prepaid_balance, PREPAID);
     }
 
     // ── Test 7: re-enable within window succeeds ──────────────────────────────
