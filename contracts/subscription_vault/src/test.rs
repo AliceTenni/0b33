@@ -3653,6 +3653,35 @@ fn test_migrate_subscription_to_new_plan_version() {
 }
 
 #[test]
+fn test_deprecated_plan_blocks_charging_existing_subscription() {
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let plan_id = test_env
+        .client
+        .create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
+    let subscription_id = test_env
+        .client
+        .create_subscription_from_plan(&subscriber, &plan_id);
+    seed_balance(&test_env.env, &test_env.client, subscription_id, PREPAID);
+    test_env.client.deprecate_plan(&merchant, &plan_id);
+    test_env.set_timestamp(T0 + INTERVAL + 1);
+
+    assert_eq!(
+        test_env.client.try_charge_subscription(
+            &subscription_id,
+            &None::<soroban_sdk::BytesN<32>>
+        ),
+        Err(Ok(Error::PlanDeprecated))
+    );
+    let sub = test_env.client.get_subscription(&subscription_id);
+    assert_eq!(sub.prepaid_balance, PREPAID);
+    assert_eq!(sub.lifetime_charged, 0);
+    assert_eq!(sub.last_payment_timestamp, T0);
+}
+
+#[test]
 fn test_migrate_subscription_rejects_cross_template_family() {
     let test_env = TestEnv::default();
     let subscriber = Address::generate(&test_env.env);
@@ -3903,6 +3932,35 @@ fn test_charge_usage_basic() {
 
     test_env.client.charge_usage(&id, &1_000_000);
     assertions::assert_prepaid_balance(&test_env.client, &id, PREPAID - 1_000_000);
+}
+
+#[test]
+fn test_charge_usage_fee_overflow_returns_error() {
+    let test_env = TestEnv::default();
+    let treasury = Address::generate(&test_env.env);
+    test_env
+        .client
+        .set_protocol_fee(&test_env.admin, &treasury, &10_000);
+
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &true,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    let usage_amount = i128::MAX / 2;
+    fixtures::seed_balance(&test_env.env, &test_env.client, id, usage_amount);
+
+    assert_eq!(
+        test_env.client.try_charge_usage(&id, &usage_amount),
+        Err(Ok(Error::Overflow))
+    );
 }
 
 #[test]

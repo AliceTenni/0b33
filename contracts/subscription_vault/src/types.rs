@@ -636,9 +636,10 @@ pub struct Subscription {
     pub auto_renew: bool,
     /// Timestamp when auto-renewal was last disabled. `None` means enabled.
     pub auto_renew_disabled_at: Option<u64>,
-    /// Optional ledger-sequence bound for expiration. When set, the subscription
-    /// also expires as soon as the ledger sequence reaches this value,
-    /// independently of the wall-clock `expires_at`. `None` disables the bound.
+    /// Optional ledger-sequence bound for expiration. When set to a nonzero value,
+    /// the subscription also expires as soon as the ledger sequence reaches this
+    /// value, independently of the wall-clock `expires_at`. `None` or `Some(0)`
+    /// disables the bound.
     ///
     /// Either bound being met is sufficient to consider the subscription
     /// expired for charge / deposit / state-transition purposes.
@@ -668,7 +669,7 @@ impl Subscription {
             }
         }
         if let Some(exp_ledger) = self.expires_at_ledger {
-            if current_ledger >= exp_ledger {
+            if exp_ledger != 0 && current_ledger >= exp_ledger {
                 return true;
             }
         }
@@ -1461,9 +1462,8 @@ pub enum Error {
     EmergencyWithdrawInvalidState = 4015,
     /// Merchant vacation mode is active — charges blocked during vacation window.
     VacationActive = 4014,
-    /// Usage billing was requested but the subscription has no `UsageLimits`
-    /// configured.
-    UsageLimitsRequired = 4016,
+    /// The subscription's plan has been deprecated and must be migrated before charging.
+    PlanDeprecated = 4015,
 
     // --- Accounting (5000-5099) ---
     /// Insufficient balance in the subscription vault.
@@ -3108,8 +3108,9 @@ pub struct PlanRegisteredEvent {
 
 /// Emitted when a merchant deprecates an existing plan template via `deprecate_plan`.
 ///
-/// Once deprecated the plan can no longer be used to create new subscriptions.
-/// Existing subscriptions created from the plan are unaffected.
+/// Once deprecated the plan can no longer be used to create new subscriptions,
+/// and existing subscriptions created from the plan cannot be charged until
+/// migrated to a non-deprecated plan.
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PlanDeprecatedEvent {
