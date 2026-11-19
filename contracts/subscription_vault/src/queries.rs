@@ -126,7 +126,7 @@
 //! - `DataKey::NextId`
 
 use crate::safe_math::{safe_mul, safe_sub};
-use crate::subscription::read_subscription;
+use crate::subscription::{read_subscription, try_get_subscription};
 use crate::types::{
     CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus,
     SubscriptionsMerchantPage, SubscriptionsTokenPage,
@@ -171,7 +171,7 @@ pub const MAX_QUERY_RESULTS: u32 = 100;
 pub const MAX_SCAN_DEPTH: u32 = 1_000;
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
-    let mut sub = read_subscription(env, subscription_id).ok_or(Error::NotFound)?;
+    let mut sub = try_get_subscription(env, subscription_id)?;
 
     // `GracePeriod` is persisted, but the transition out of it only happens on
     // the next charge attempt. If the grace window has already elapsed with no

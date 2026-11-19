@@ -77,7 +77,7 @@ use crate::types::{
     TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
     BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{Address, Env, Symbol, TryFromVal, Val, Vec};
 
 const MIN_SUBSCRIPTION_INTERVAL_SECONDS: u64 = 60;
 /// Hard upper bound on billing interval: 365 days (31 536 000 s).
@@ -188,6 +188,27 @@ pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
     maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
 
+/// Reads a `Subscription` from persistent storage without panicking on
+/// deserialization failure (for example, after an incomplete schema migration).
+///
+/// The raw `Val` is loaded first so `Persistent::get` cannot trap on a type
+/// conversion mismatch; `Subscription::try_from_val` then converts it
+/// explicitly, mapping both missing entries and malformed payloads to
+/// `Error::NotFound`.
+pub(crate) fn try_get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
+    let key = DataKey::Sub(subscription_id);
+    let raw: Val = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let sub = Subscription::try_from_val(env, &raw).map_err(|_| Error::NotFound)?;
+    extend_subscription_ttl(env, &key);
+    Ok(sub)
+}
+
+/// Convenience wrapper over [`try_get_subscription`] for scan/list callers that
+/// skip missing or undecodable subscription records.
+pub(crate) fn read_subscription(env: &Env, subscription_id: u32) -> Option<Subscription> {
+    try_get_subscription(env, subscription_id).ok()
+}
+
 pub(crate) fn write_subscription(env: &Env, subscription_id: u32, sub: &Subscription) {
     env.storage()
         .persistent()
@@ -264,11 +285,7 @@ fn count_active_subscriptions_for_plan(
             continue;
         }
 
-        if let Some(sub) = env
-            .storage()
-            .persistent()
-            .get::<_, Subscription>(&DataKey::Sub(id))
-        {
+        if let Some(sub) = read_subscription(env, id) {
             if &sub.subscriber == subscriber && sub.status == SubscriptionStatus::Active {
                 count = count.saturating_add(1);
             }
@@ -340,11 +357,7 @@ fn compute_subscriber_exposure(
 
     let mut exposure: i128 = 0;
     for id in 0..next_id {
-        if let Some(sub) = env
-            .storage()
-            .persistent()
-            .get::<_, Subscription>(&DataKey::Sub(id))
-        {
+        if let Some(sub) = read_subscription(env, id) {
             if &sub.subscriber != subscriber || &sub.token != token {
                 continue;
             }
