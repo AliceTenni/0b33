@@ -65,6 +65,8 @@ mod test_subscription_transfer;
 mod test_emergency_stop_concurrent_charge;
 #[cfg(test)]
 mod test_sub_account_fee_propagation;
+#[cfg(test)]
+mod test_get_subscription_deserialization;
 mod types;
 mod validation;
 
