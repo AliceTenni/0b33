@@ -112,8 +112,17 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 
 /// Target TTL for billing period snapshot entries when extended.
 pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
-/// Maximum number of recent billing period snapshots retained per subscription.
+/// Maximum number of billing period snapshots retained per subscription in the
+/// rolling index. When a new snapshot would push the count above this limit the
+/// oldest entry is evicted, keeping exactly this many snapshots at all times.
 pub const MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION: u32 = 365;
+
+/// Replay protection domain for charge_subscription.
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 0;
+/// Replay protection domain for deposit_funds.
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 1;
+/// Replay protection domain for charge_one_off.
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 2;
 
 /// Number of idempotency slots retained per subscription.
 ///
