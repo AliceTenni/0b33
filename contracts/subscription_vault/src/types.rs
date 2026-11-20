@@ -381,6 +381,13 @@ pub enum DataKey {
     MerchantSubAccountList(Address),
     /// Configured dispute response window in seconds. Discriminant 84.
     DisputeWindowSecs,
+    /// Admin-configurable idempotency-key lifetime in seconds. Discriminant 85.
+    ///
+    /// When absent, `idempotency::get_ttl_secs` falls back to the compile-time
+    /// constant `IDEM_TTL_SECS` (7 days).  High-frequency deployments can
+    /// lower this value to reclaim ring-buffer slots faster; compliance-
+    /// sensitive deployments can raise it for a longer replay-protection window.
+    IdempotencyTtlSecs,
 }
 
 impl DataKey {
@@ -476,6 +483,7 @@ impl DataKey {
             DataKey::MerchantSubAccount(_, _) => 82,
             DataKey::MerchantSubAccountList(_) => 83,
             DataKey::DisputeWindowSecs => 84,
+            DataKey::IdempotencyTtlSecs => 85,
         }
     }
 
@@ -1186,6 +1194,21 @@ pub struct DisputeWindowUpdatedEvent {
     pub contract_id: Address,
 }
 
+/// Emitted when the admin changes the contract-wide idempotency-key TTL.
+///
+/// Listeners (indexers, monitoring) can use this event to update their
+/// expectations around replay-protection windows.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct IdemTtlUpdatedEvent {
+    pub admin: Address,
+    pub old_ttl_secs: u64,
+    pub new_ttl_secs: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+    pub contract_id: Address,
+}
+
 // ── Cancellation Escrow ─────────────────────────────────────────────────────
 //
 // NOTE: The escrow path is no longer written by `apply_cancellation` — the
@@ -1297,6 +1320,11 @@ pub enum ProposalKind {
     /// This is a critical security operation requiring governance approval.
     /// Cannot be executed via immediate admin action; must go through quorum voting.
     SetOracleConfig = 8,
+    /// Set the idempotency-key TTL in seconds (`target3`).
+    ///
+    /// Allows governance to override the runtime TTL without being subject to
+    /// the per-key admin cooldown, the same pattern used by `SetDisputeWindow`.
+    SetIdempotencyTtl = 9,
 }
 
 

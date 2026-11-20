@@ -467,6 +467,11 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
             // Update oracle address via governance, bypassing the cooldown.
             crate::oracle::set_oracle_address(env, proposal.target)?;
         }
+        ProposalKind::SetIdempotencyTtl => {
+            // target3 carries the new TTL in seconds.
+            // Governance proposals intentionally bypass the admin cooldown.
+            crate::idempotency::apply_ttl_secs(env, &proposal.proposer, u64::from(proposal.target3))?;
+        }
     }
 
     // Mark as executed
