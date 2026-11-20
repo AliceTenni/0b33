@@ -3537,7 +3537,7 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
         admin::enforce_config_cooldown(&env, "IdempotencyTtl")?;
-        idempotency::set_ttl_secs(&env, ttl_secs)
+        idempotency::apply_ttl_secs(&env, &admin, ttl_secs)
     }
 
     /// Get the configured idempotency-key lifetime in seconds.
