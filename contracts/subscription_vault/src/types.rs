@@ -2937,6 +2937,37 @@ pub struct ScheduledPayoutEvent {
     pub contract_id: Address,
 }
 
+/// Why a [`PayoutScheduleCheckedEvent`] produced no token payout.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PayoutCheckReason {
+    /// No payout schedule is configured for the merchant.
+    NoSchedule = 0,
+    /// A schedule exists but the configured cadence has not elapsed yet.
+    CadencePending = 1,
+}
+
+/// Emitted by `flush_payouts` whenever the payout schedule is evaluated but no
+/// token payout is actually executed.
+///
+/// This gives off-chain payout monitors a positive on-chain signal that the
+/// call succeeded, so a legitimate "no payouts due" result is distinguishable
+/// from a failed call or a silently dropped transaction.  `next_payout_at` is
+/// the Unix timestamp at which the merchant next becomes eligible for a payout
+/// (`last_payout_at + cadence_seconds`); it is `0` when no schedule is
+/// configured.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PayoutScheduleCheckedEvent {
+    pub merchant: Address,
+    pub reason: PayoutCheckReason,
+    /// Next eligible payout timestamp, or `0` when no schedule is configured.
+    pub next_payout_at: u64,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
 /// Legacy short topic shared by merchant and subscriber withdrawal events.
 pub const TOPIC_WITHDRAWN: Symbol = symbol_short!("withdrawn");
 
