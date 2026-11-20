@@ -91,6 +91,16 @@ pub fn write_period_snapshot(env: &Env, mut snapshot: BillingPeriodSnapshot) -> 
             idx.remove(0);
         }
         idx.push_back(snapshot.period_index);
+
+        while idx.len() > MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION {
+            let oldest_period_index = idx.get(0).unwrap();
+            idx.remove(0);
+            env.storage().persistent().remove(&DataKey::BillingPeriodSnapshot(
+                snapshot.subscription_id,
+                oldest_period_index,
+            ));
+        }
+
         env.storage().persistent().set(&idx_key, &idx);
         extend_index_ttl(env, &idx_key);
     }
