@@ -26,7 +26,8 @@ use crate::types::{
     MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
     MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantVacation,
-    MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
+    MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule,
+    PayoutScheduleCheckedEvent, PayoutCheckReason, PlanDeprecatedEvent,
     PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE,
@@ -1143,18 +1144,31 @@ fn flush_merchant_token(
 /// Returns the number of token payouts actually executed.
 pub fn do_flush_payouts(env: &Env, merchant: Address, caller: Address) -> Result<u32, Error> {
     let schedule = get_payout_schedule(env, &merchant);
+    let now = env.ledger().timestamp();
 
-    // No schedule configured — nothing to do.
+    // No schedule configured — nothing to do.  Emit a check event so off-chain
+    // monitors can tell a successful no-op from a failed or dropped call.
     if schedule.cadence_seconds == 0 && schedule.min_payout == 0 {
+        emit_payout_schedule_checked(env, &merchant, PayoutCheckReason::NoSchedule, 0, now);
         return Ok(0);
     }
-
-    let now = env.ledger().timestamp();
 
     // Enforce cadence: enough time since last flush?
     if schedule.last_payout_at > 0
         && now.saturating_sub(schedule.last_payout_at) < schedule.cadence_seconds
     {
+        // Cadence has not elapsed — emit a check event carrying the next
+        // eligible payout time so monitors know when to retry.
+        let next_payout_at = schedule
+            .last_payout_at
+            .saturating_add(schedule.cadence_seconds);
+        emit_payout_schedule_checked(
+            env,
+            &merchant,
+            PayoutCheckReason::CadencePending,
+            next_payout_at,
+            now,
+        );
         return Err(Error::IntervalNotElapsed);
     }
 
@@ -1191,6 +1205,31 @@ pub fn do_flush_payouts(env: &Env, merchant: Address, caller: Address) -> Result
     );
 
     Ok(tokens_paid)
+}
+
+/// Emit a `payout_schedule_checked` event for a no-op payout evaluation.
+///
+/// This is the positive on-chain signal that distinguishes a successful
+/// "no payouts due" `flush_payouts` call from a failed or silently dropped
+/// transaction.  `next_payout_at` is the next eligible payout timestamp, or `0`
+/// when no schedule is configured.
+fn emit_payout_schedule_checked(
+    env: &Env,
+    merchant: &Address,
+    reason: PayoutCheckReason,
+    next_payout_at: u64,
+    now: u64,
+) {
+    env.events().publish(
+        (Symbol::new(env, "payout_schedule_checked"), merchant.clone()),
+        PayoutScheduleCheckedEvent {
+            merchant: merchant.clone(),
+            reason,
+            next_payout_at,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
 }
 
 pub fn update_merchant_config(
