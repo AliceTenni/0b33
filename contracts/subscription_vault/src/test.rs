@@ -11114,3 +11114,132 @@ fn test_dispute_escrow_accounting_invariant() {
         test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
     assert_eq!(merchant_after_resolve, initial_merchant_balance);
 }
+
+// ── get_merchant_earnings denormalisation tests ───────────────────────────────
+//
+// DataKey::MerchantEarnings stores amounts in the internal 9-decimal
+// normalised denomination.  get_merchant_token_earnings must call
+// denormalize_amount before returning so callers receive native-decimal values.
+
+/// 6-decimal token (e.g. USDC).
+/// Internal representation uses 9 decimals, so stored values are 10^3 times
+/// the native amount.  Verifies that the query returns values in 6-decimal
+/// native units.
+#[test]
+fn test_get_merchant_earnings_denormalizes_6_decimal_token() {
+    use crate::types::{AccruedTotals, DataKey, TokenEarnings};
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    // Register a 6-decimal token so TokenDecimals is stored and the contract is initialised.
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    let merchant = Address::generate(&env);
+    let merchant2 = merchant.clone();
+
+    // Write a TokenEarnings record directly in the internal 9-decimal form.
+    // Native 6-decimal amounts:
+    //   interval  = 10_000_000  (10 USDC)
+    //   usage     =  5_000_000  ( 5 USDC)
+    //   one_off   =  1_000_000  ( 1 USDC)
+    //   withdrawals=  3_000_000  ( 3 USDC)
+    //   refunds   =    500_000   (0.5 USDC)
+    //
+    // Internal 9-decimal (multiply by 10^3):
+    //   interval  = 10_000_000_000
+    //   usage     =  5_000_000_000
+    //   one_off   =  1_000_000_000
+    //   withdrawals=  3_000_000_000
+    //   refunds   =    500_000_000
+    env.as_contract(&contract_id, || {
+        let raw = TokenEarnings {
+            accruals: AccruedTotals {
+                interval:  10_000_000_000i128,
+                usage:      5_000_000_000i128,
+                one_off:    1_000_000_000i128,
+            },
+            withdrawals: 3_000_000_000i128,
+            refunds:       500_000_000i128,
+        };
+        env.storage().instance().set(
+            &DataKey::MerchantEarnings(merchant2.clone(), token.clone()),
+            &raw,
+        );
+    });
+
+    let earnings = client.get_merchant_token_earnings(&merchant, &token);
+
+    assert_eq!(earnings.accruals.interval,  10_000_000i128, "interval should be in native 6-decimal units");
+    assert_eq!(earnings.accruals.usage,      5_000_000i128, "usage should be in native 6-decimal units");
+    assert_eq!(earnings.accruals.one_off,    1_000_000i128, "one_off should be in native 6-decimal units");
+    assert_eq!(earnings.withdrawals,         3_000_000i128, "withdrawals should be in native 6-decimal units");
+    assert_eq!(earnings.refunds,               500_000i128, "refunds should be in native 6-decimal units");
+}
+
+/// 18-decimal token (e.g. a Stellar asset with 18 decimals).
+/// Internal 9-decimal form is smaller than native by 10^9, so stored amounts
+/// are divided by 10^9 relative to the native value.
+#[test]
+fn test_get_merchant_earnings_denormalizes_18_decimal_token() {
+    use crate::types::{AccruedTotals, DataKey, TokenEarnings};
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    // Register the primary token first (must be 6-decimal for the USDC vault).
+    let primary_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&primary_token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+    // Add an 18-decimal token as a second accepted token.
+    let token_admin2 = Address::generate(&env);
+    let token18 = env.register_stellar_asset_contract_v2(token_admin2.clone()).address();
+    client.add_accepted_token(&admin, &token18, &18);
+
+    let merchant = Address::generate(&env);
+    let merchant2 = merchant.clone();
+
+    // Native 18-decimal amounts:
+    //   interval  = 2_000_000_000_000_000_000  (2 tokens)
+    //   usage     = 1_000_000_000_000_000_000  (1 token)
+    //   one_off   =   500_000_000_000_000_000  (0.5 tokens)
+    //   withdrawals=  500_000_000_000_000_000  (0.5 tokens)
+    //   refunds   =   100_000_000_000_000_000  (0.1 tokens)
+    //
+    // Internal 9-decimal (divide by 10^9):
+    //   interval  = 2_000_000_000
+    //   usage     = 1_000_000_000
+    //   one_off   =   500_000_000
+    //   withdrawals=  500_000_000
+    //   refunds   =   100_000_000
+    env.as_contract(&contract_id, || {
+        let raw = TokenEarnings {
+            accruals: AccruedTotals {
+                interval:  2_000_000_000i128,
+                usage:     1_000_000_000i128,
+                one_off:     500_000_000i128,
+            },
+            withdrawals: 500_000_000i128,
+            refunds:     100_000_000i128,
+        };
+        env.storage().instance().set(
+            &DataKey::MerchantEarnings(merchant2.clone(), token18.clone()),
+            &raw,
+        );
+    });
+
+    let earnings = client.get_merchant_token_earnings(&merchant, &token18);
+
+    assert_eq!(earnings.accruals.interval,  2_000_000_000_000_000_000i128, "interval should be in native 18-decimal units");
+    assert_eq!(earnings.accruals.usage,     1_000_000_000_000_000_000i128, "usage should be in native 18-decimal units");
+    assert_eq!(earnings.accruals.one_off,     500_000_000_000_000_000i128, "one_off should be in native 18-decimal units");
+    assert_eq!(earnings.withdrawals,          500_000_000_000_000_000i128, "withdrawals should be in native 18-decimal units");
+    assert_eq!(earnings.refunds,              100_000_000_000_000_000i128, "refunds should be in native 18-decimal units");
+}
